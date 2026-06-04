@@ -7,6 +7,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, models
 from collections import Counter
+from pathlib import Path
 
 # 引入統計指標與繪圖套件
 import matplotlib.pyplot as plt
@@ -88,7 +89,7 @@ if __name__ == "__main__":
         print(f"顯示卡型號: {torch.cuda.get_device_name(0)}")
 
     img_size = 256
-    BATCH_SIZE = 32 
+    BATCH_SIZE = 128 
     NUM_WORKERS = 0  
     MAX_EPOCHS = 500  # 啟用早停，可以放心地把上限設大
     PATIENCE = 5     # 連續 5 輪驗證 Loss 沒下降就停
@@ -105,20 +106,28 @@ if __name__ == "__main__":
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    print("\n正在初始化 Datasets 並統計動作分類...")
+
+    # 💡 自動取得目前 main.py 所在的資料夾路徑
+    BASE_DIR = Path(__file__).resolve().parent
+
+    print("正在初始化 Datasets 並統計動作分類...")
+
+    # 💡 透過 BASE_DIR 串接同層的資料夾
     train_dataset = MedicalImageDataset(
-        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\rgb', 
-        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\labels.csv', 
+        data_dir=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_train' / 'rgb'), 
+        label_path=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_train' / 'labels.csv'), 
         transform=train_transform
     )
+    
     val_dataset = MedicalImageDataset(
-        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\rgb', 
-        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\labels.csv', 
+        data_dir=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_valdidate' / 'rgb'), 
+        label_path=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_valdidate' / 'labels.csv'), 
         transform=val_test_transform
     )
+    
     test_dataset = MedicalImageDataset(
-        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\rgb', 
-        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\labels.csv', 
+        data_dir=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_test' / 'rgb'), 
+        label_path=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_test' / 'labels.csv'), 
         transform=val_test_transform
     )
 

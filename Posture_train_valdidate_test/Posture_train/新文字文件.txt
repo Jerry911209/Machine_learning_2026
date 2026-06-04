@@ -1,0 +1,6 @@
+Standing = class 1
+Sitting  = class 2
+Lying    = class 3
+Bending  = class 4
+Crawling = class 5
+Empty    = class 6

@@ -5,7 +5,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from collections import Counter
-from pathlib import Path
 
 # =====================================================================
 # 1. 完全體 Dataset (支援動作名稱映射與 PyTorch 標籤修正)
@@ -87,46 +86,24 @@ if __name__ == "__main__":
 
     print("正在初始化 Datasets 並統計動作分類...")
 
-    # train_dataset = MedicalImageDataset(
-    #     data_dir=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test\Posture_train\rgb', 
-    #     label_path=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test\Posture_train\labels.csv', 
-    #     transform=train_transform
-    # )
-    
-    # val_dataset = MedicalImageDataset(
-    #     data_dir=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test\Posture_test"\Posture_valdidate\rgb', 
-    #     label_path=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test\Posture_valdidate\labels.csv', 
-    #     transform=val_test_transform
-    # )
-    
-    # test_dataset = MedicalImageDataset(
-    #     data_dir=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test\Posture_test\rgb', 
-    #     label_path=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test\Posture_test\labels.csv', 
-    #     transform=val_test_transform
-    # )
-    # 💡 自動取得目前 main.py 所在的資料夾路徑
-    BASE_DIR = Path(__file__).resolve().parent
-
-    print("正在初始化 Datasets 並統計動作分類...")
-
-    # 💡 透過 BASE_DIR 串接同層的資料夾
     train_dataset = MedicalImageDataset(
-        data_dir=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_train' / 'rgb'), 
-        label_path=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_train' / 'labels.csv'), 
+        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\rgb', 
+        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\labels.csv', 
         transform=train_transform
     )
     
     val_dataset = MedicalImageDataset(
-        data_dir=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_valdidate' / 'rgb'), 
-        label_path=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_valdidate' / 'labels.csv'), 
+        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\rgb', 
+        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\labels.csv', 
         transform=val_test_transform
     )
     
     test_dataset = MedicalImageDataset(
-        data_dir=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_test' / 'rgb'), 
-        label_path=str(BASE_DIR / 'Posture_train_valdidate_test' / 'Posture_test' / 'labels.csv'), 
+        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\rgb', 
+        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\labels.csv', 
         transform=val_test_transform
     )
+
     # 📊 定義精美統計函數
     def pprint_dataset_stats(dataset, name):
         counts = Counter(dataset.raw_labels)  # 使用原始標籤進行統計

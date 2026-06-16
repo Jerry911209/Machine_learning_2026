@@ -68,7 +68,7 @@ class GaitMRFOOptimizedNet(nn.Module):
         self.efficient_pool = nn.AdaptiveAvgPool2d((1, 1))
         
         if selected_indices_list is None:
-            selected_indices_list = torch.linspace(0, 1791, steps=762).long()
+            selected_indices_list = torch.linspace(0, 1791, steps=1024).long()
         else:
             selected_indices_list = torch.tensor(selected_indices_list).long()
             
@@ -91,7 +91,7 @@ class GaitMRFOOptimizedNet(nn.Module):
         return self.classifier(f_fused)
 
 # =====================================================================
-# 3. Baseline 6: 雙流特徵 + MRFO 篩選 + 深度收窄神經網絡
+# 3. Baseline 6: 雙流特徵 + MRFO 篩選 + 寬深多層幾何網絡 (修復資訊瓶頸) 🌟
 # =====================================================================
 class GaitMRFONarrowNet(nn.Module):
     def __init__(self, num_classes=6, selected_indices_list=None):
@@ -105,24 +105,25 @@ class GaitMRFONarrowNet(nn.Module):
         self.efficient_pool = nn.AdaptiveAvgPool2d((1, 1))
         
         if selected_indices_list is None:
-            selected_indices_list = torch.linspace(0, 1791, steps=762).long()
+            selected_indices_list = torch.linspace(0, 1791, steps=1024).long()
         else:
             selected_indices_list = torch.tensor(selected_indices_list).long()
             
         self.register_buffer('mrfo_indices', selected_indices_list)
         optimized_dim = len(selected_indices_list)
         
+        # 💡 【架構修正】：放緩收窄步調，改為 512 -> 256，並在 FINAL_REPORT 展現真實隱藏層精華維度
         self.narrow_backbone = nn.Sequential(
-            nn.Linear(optimized_dim, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(optimized_dim, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(256, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.2)
         )
-        self.classifier = nn.Linear(64, num_classes)
+        self.classifier = nn.Linear(256, num_classes)
 
     def forward(self, x):
         f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1) 
@@ -198,18 +199,18 @@ class MedicalImageDataset(Dataset):
 # =====================================================================
 if __name__ == "__main__":
     PROJECT_ROOT_DIR = os.getcwd()
-
-    for loop_cnt in range(1, 5):
+    total_loop_cnt=2
+    
+    for loop_cnt in range(1, total_loop_cnt):
         os.chdir(PROJECT_ROOT_DIR)
         print("\n" + "="*60)
-        print(f"🔄 【第 {loop_cnt} / 4 次大型獨立重複實驗】正式啟動")
+        print(f"🔄 【第 {loop_cnt} / {total_loop_cnt} 次大型獨立重複實驗】正式啟動")
         print("="*60 + "\n")
         
-        # 💡 【自由控制開關區】🌟
-        # 現在你只要在這裡「把不想練的刪掉或加註解」，程式在執行時絕對不會白白浪費時間！
+        # 💡 【自由控制開關區】
         ACTIVE_RUN_LIST = [
-            "SqueezeNet_Only", 
-            "EfficientNet_Only", 
+            # "SqueezeNet_Only", 
+            # "EfficientNet_Only", 
             "GaitMCCA_Fusion", 
             "MRFO_Optimization",
             "MRFO_SVM",          
@@ -230,7 +231,7 @@ if __name__ == "__main__":
         os.makedirs(OUTPUT_RESULT_DIR, exist_ok=True)
         print(f"📁 建立本次成果歸檔夾: {OUTPUT_RESULT_DIR}")
 
-        BASE_DIR = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026_2\Posture_New_Split"
+        BASE_DIR = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split"
         TRAIN_DIR = os.path.join(BASE_DIR, "Posture_train")
         VAL_DIR = os.path.join(BASE_DIR, "Posture_valdidate")             
         TEST_DIR = os.path.join(BASE_DIR, "Posture_test")   
@@ -269,8 +270,7 @@ if __name__ == "__main__":
         class_names = ["Standing", "Sitting", "Lying", "Bending", "Crawling", "Empty"]
 
         # =====================================================================
-        # 🔄 【第一階段：智慧防護判定機制】🌟
-        # 只有當使用者「實打實要在這一輪排程裡訓練 MRFO 模型」時，才啟動雙階段微調！
+        # 🔄 【第一階段：智慧防護判定機制】
         # =====================================================================
         mrfo_final_indices = None
         need_mrfo = any("MRFO" in mode for mode in ACTIVE_RUN_LIST)
@@ -292,7 +292,7 @@ if __name__ == "__main__":
             cached_features, cached_labels = [], []
             with torch.no_grad():
                 for idx, (inputs, labels) in enumerate(temp_loader):
-                    if idx >= 300: break 
+                    if idx >= 1000: break #快取樣本數提升到 1000 筆
                     inputs = inputs.to(DEVICE)
                     f_s = torch.flatten(pre_trainer.squeeze_pool(pre_trainer.squeeze_features(inputs)), 1)
                     f_e = torch.flatten(pre_trainer.efficient_pool(pre_trainer.efficient_features(inputs)), 1)
@@ -314,13 +314,14 @@ if __name__ == "__main__":
                 def obj_func(self, x):
                     selected_idx = np.where(x > 0.5)[0]
                     num_selected = len(selected_idx)
-                    if num_selected < 10 or num_selected > 1300: return 0.0 
+                    if num_selected < 10 or num_selected > 1500: return 0.0 
                     try:
                         clf = LinearSVC(dual=False, random_state=42, max_iter=1000)
                         clf.fit(X_eval_train[:, selected_idx], y_eval_train)
                         preds = clf.predict(X_eval_val[:, selected_idx])
                         val_acc = accuracy_score(y_eval_val, preds)
-                        distance_penalty = np.exp(-abs(num_selected - 762) / 1000.0)
+                        # 💡 【特徵數提高修正】：引導目標特徵數往更豐沛的 1024 維靠攏
+                        distance_penalty = np.exp(-abs(num_selected - 1024) / 1000.0)
                         return (val_acc * 0.99) + (distance_penalty * 0.01)
                     except:
                         return 0.0
@@ -333,12 +334,11 @@ if __name__ == "__main__":
             mrfo_final_indices = np.where(best_agent.solution > 0.5)[0]
             
             if len(mrfo_final_indices) < 10 or len(mrfo_final_indices) > 1500:
-                mrfo_final_indices = np.random.choice(1792, size=762, replace=False)
+                mrfo_final_indices = np.random.choice(1792, size=1024, replace=False)
                 mrfo_final_indices = np.sort(mrfo_final_indices)
             print(f"🎉 鬼蝠魟篩選完成！成功從微調空間精選出特徵數: 【 {len(mrfo_final_indices)} 維 】\n")
         else:
-            # 💡 【安全防護兜底】：如果此輪沒有要執行 MRFO 家族（純練單網路），直接給予預設值，一秒鐘都不會白白浪費！
-            mrfo_final_indices = np.linspace(0, 1791, steps=762).astype(int)
+            mrfo_final_indices = np.linspace(0, 1791, steps=1024).astype(int)
 
         # =====================================================================
         # 🔄 消融排程動態執行迴圈
@@ -370,7 +370,7 @@ if __name__ == "__main__":
                 elif RUN_MODE == "MRFO_NarrowNet":
                     model_name = "Baseline6_MRFO_NarrowNet"
                     model = GaitMRFONarrowNet(num_classes=NUM_CLASSES, selected_indices_list=mrfo_final_indices)
-                    features_dim_before_classifier = 64 
+                    features_dim_before_classifier = 256  # 💡 更新為 256 維，修復瓶頸
                 
                 print(f"⚙️ 架構: {model_name} | 分類前特徵維度: {features_dim_before_classifier} 維")
                 model = model.to(DEVICE)
@@ -451,7 +451,7 @@ if __name__ == "__main__":
         print(f"{'模型名稱 (Model Name)':<30} | {'特徵數 (Dim)':<10} | {'準確度 (Acc)':<12} | {'精準率 (Prec)':<12} | {'召回率 (Rec)':<12} | {'F1-Score':<12}")
         print(f"--------------------------------------------------------------------------------------")
         for m_name, res in FINAL_REPORT.items():
-            print(f"{m_name:<30} | {res['dim']:<10} | {res['acc']:.4f:<12} | {res['p']:.4f:<12} | {res['r']:.4f:<12} | {res['f1']:.4f:<12}")
+            print(f"{m_name:<30} | {res['dim']:<10} | {res['acc']:<12.4f} | {res['p']:<12.4f} | {res['r']:<12.4f} | {res['f1']:<12.4f}")
         print(f"--------------------------------------------------------------------------------------")
 
         print(f"\n📊 正在自動繪製 [Loop {loop_cnt}] 多指標綜合統計圖...")
@@ -460,8 +460,8 @@ if __name__ == "__main__":
             metrics_labels = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
             
             data_matrix = []
-            for m_name in models_keys:
-                data_matrix.append([FINAL_REPORT[m_name]['acc'], FINAL_REPORT[m_name]['p'], FINAL_REPORT[m_name]['r'], FINAL_REPORT[m_name]['f1']])
+            for m_name, res in FINAL_REPORT.items():
+                data_matrix.append([res['acc'], res['p'], res['r'], res['f1']])
             data_matrix = np.array(data_matrix)
             
             x = np.arange(len(metrics_labels))

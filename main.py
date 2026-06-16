@@ -23,6 +23,7 @@ from plotter import plot_learning_curve, plot_confusion_matrix
 # 🌟 新增：將 mealpy 的底層類別移至最頂端，徹底解決全域未定義報錯 🌟
 from mealpy.utils.problem import Problem
 from mealpy.utils.space import BinaryVar
+
 # =====================================================================
 # 1. Baseline 3：雙流拼接融合網絡 (GaitMCCA Style - 1024維保護層)
 # =====================================================================
@@ -198,18 +199,19 @@ class MedicalImageDataset(Dataset):
 if __name__ == "__main__":
     PROJECT_ROOT_DIR = os.getcwd()
 
-    for loop_cnt in range(1, 2):
+    for loop_cnt in range(1, 5):
         os.chdir(PROJECT_ROOT_DIR)
         print("\n" + "="*60)
         print(f"🔄 【第 {loop_cnt} / 4 次大型獨立重複實驗】正式啟動")
         print("="*60 + "\n")
         
-        # 💡 排程控制開關（可依據需求增減項目，權重圖表全自動對齊）
+        # 💡 【自由控制開關區】🌟
+        # 現在你只要在這裡「把不想練的刪掉或加註解」，程式在執行時絕對不會白白浪費時間！
         ACTIVE_RUN_LIST = [
             "SqueezeNet_Only", 
             "EfficientNet_Only", 
             "GaitMCCA_Fusion", 
-            #"MRFO_Optimization",
+            "MRFO_Optimization",
             "MRFO_SVM",          
             "MRFO_NarrowNet"     
         ]
@@ -228,7 +230,6 @@ if __name__ == "__main__":
         os.makedirs(OUTPUT_RESULT_DIR, exist_ok=True)
         print(f"📁 建立本次成果歸檔夾: {OUTPUT_RESULT_DIR}")
 
-        # 完美保留您的硬碟路徑不動
         BASE_DIR = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026_2\Posture_New_Split"
         TRAIN_DIR = os.path.join(BASE_DIR, "Posture_train")
         VAL_DIR = os.path.join(BASE_DIR, "Posture_valdidate")             
@@ -268,19 +269,18 @@ if __name__ == "__main__":
         class_names = ["Standing", "Sitting", "Lying", "Bending", "Crawling", "Empty"]
 
         # =====================================================================
-        # 🔄 【第一階段：打底微調】
-        # 只要排程內有 MRFO 家族，我們就「先」在背景將融合網路練到最強，作為特徵提取器！
+        # 🔄 【第一階段：智慧防護判定機制】🌟
+        # 只有當使用者「實打實要在這一輪排程裡訓練 MRFO 模型」時，才啟動雙階段微調！
         # =====================================================================
         mrfo_final_indices = None
         need_mrfo = any("MRFO" in mode for mode in ACTIVE_RUN_LIST)
         
         if need_mrfo:
-            print(f"\n🌟 [學術重構核心] 啟動第一階段：正在預先微調雙流 MCCA 融合網絡以獲取黃金領域知識...")
+            print(f"\n🌟 [學術重構核心] 偵測到排程包含 MRFO 家族，啟動第一階段雙流網絡微調打底...")
             pre_trainer = GaitMCCAStyleNet(num_classes=NUM_CLASSES).to(DEVICE)
             pre_criterion = nn.CrossEntropyLoss()
             pre_optimizer = optim.Adam(pre_trainer.parameters(), lr=IR)
             
-            # 利用 Early Stopping 將融合網路練到最優狀態
             pre_trainer, _ = train_model_with_early_stopping(
                 pre_trainer, dataloaders, pre_criterion, pre_optimizer, 
                 num_epochs=EPOCHS, patience=PATIENCE, device=DEVICE
@@ -316,7 +316,6 @@ if __name__ == "__main__":
                     num_selected = len(selected_idx)
                     if num_selected < 10 or num_selected > 1300: return 0.0 
                     try:
-                        # 💡 鬼蝠魟此時的眼睛看的是微調特徵在 LinearSVC 上的頂尖準確度！
                         clf = LinearSVC(dual=False, random_state=42, max_iter=1000)
                         clf.fit(X_eval_train[:, selected_idx], y_eval_train)
                         preds = clf.predict(X_eval_val[:, selected_idx])
@@ -337,6 +336,9 @@ if __name__ == "__main__":
                 mrfo_final_indices = np.random.choice(1792, size=762, replace=False)
                 mrfo_final_indices = np.sort(mrfo_final_indices)
             print(f"🎉 鬼蝠魟篩選完成！成功從微調空間精選出特徵數: 【 {len(mrfo_final_indices)} 維 】\n")
+        else:
+            # 💡 【安全防護兜底】：如果此輪沒有要執行 MRFO 家族（純練單網路），直接給予預設值，一秒鐘都不會白白浪費！
+            mrfo_final_indices = np.linspace(0, 1791, steps=762).astype(int)
 
         # =====================================================================
         # 🔄 消融排程動態執行迴圈
@@ -375,32 +377,27 @@ if __name__ == "__main__":
                 criterion = nn.CrossEntropyLoss()
                 optimizer = optim.Adam(model.parameters(), lr=IR)
 
-                # 執行實體訓練
                 model, history = train_model_with_early_stopping(
                     model, dataloaders, criterion, optimizer, num_epochs=EPOCHS, patience=PATIENCE, device=DEVICE
                 )
                 
-                # 備份權重
                 abs_w_path = os.path.abspath(os.path.join(OUTPUT_RESULT_DIR, f"best_model_{model_name}.pth"))
                 torch.save(model.state_dict(), abs_w_path)
                 
-                # 畫學習曲線
                 os.chdir(os.path.abspath(OUTPUT_RESULT_DIR))
                 try: plot_learning_curve(history, model_name)
                 except Exception as e: print(f"⚠️ 學習曲線儲存失敗: {e}")
                 os.chdir(PROJECT_ROOT_DIR)
 
-                # 測試集效能評估
                 true_labels, pred_labels, metrics = evaluate_model(model, dataloaders['test'], device=DEVICE)
                 acc, precision, recall, f1 = metrics
 
-            # --- 模式 B: 🌟 全新新增 MRFO + 傳統 SVM 分類頭模式 (提取微調特徵餵給 RBF-SVM) ---
+            # --- 模式 B: MRFO + 傳統 SVM 分類頭模式 ---
             elif RUN_MODE == "MRFO_SVM":
                 model_name = "Baseline5_MRFO_SVM"
                 features_dim_before_classifier = len(mrfo_final_indices)
                 print(f"⚙️ 架構: {model_name} | 特徵維度: {features_dim_before_classifier} 維 (微調特徵對接 RBF-SVM)")
                 
-                # 1. 💡 關鍵點：此處提取特徵用的是前面實打實練滿微調權重的 pre_trainer，確保特徵品質極高！
                 print("   -> 正在使用微調後的雙流網路提取完整數據集的特徵矩陣...")
                 
                 def extract_all_features(loader):
@@ -418,16 +415,13 @@ if __name__ == "__main__":
                 X_train_all, y_train_all = extract_all_features(dataloaders['train'])
                 X_test_all, y_test_all = extract_all_features(dataloaders['test'])
                 
-                # 2. 進行 MRFO 經監督篩選後的特徵切片
                 X_train_sliced = X_train_all[:, mrfo_final_indices]
                 X_test_sliced = X_test_all[:, mrfo_final_indices]
                 
-                # 3. 訓練 SVM
                 print("   -> 正在擬合支持向量機 (SVC) 分類頭...")
                 svm_model = SVC(kernel='rbf', C=1.0, gamma='scale', random_state=42)
                 svm_model.fit(X_train_sliced, y_train_all)
                 
-                # 4. 預測測試集指標
                 pred_labels = svm_model.predict(X_test_sliced)
                 true_labels = y_test_all
                 
@@ -439,12 +433,10 @@ if __name__ == "__main__":
                 
                 history = {'train_loss': [], 'val_loss': []}
 
-            # 總戰報數據整合
             FINAL_REPORT[model_name] = {
                 "dim": features_dim_before_classifier, "acc": acc, "p": precision, "r": recall, "f1": f1
             }
 
-            # 輸出混淆矩陣圖 (.png)
             os.chdir(os.path.abspath(OUTPUT_RESULT_DIR))
             try: plot_confusion_matrix(true_labels, pred_labels, class_names, model_name)
             except Exception as e: print(f"⚠️ 混淆矩陣圖儲存失敗: {e}")
@@ -459,7 +451,7 @@ if __name__ == "__main__":
         print(f"{'模型名稱 (Model Name)':<30} | {'特徵數 (Dim)':<10} | {'準確度 (Acc)':<12} | {'精準率 (Prec)':<12} | {'召回率 (Rec)':<12} | {'F1-Score':<12}")
         print(f"--------------------------------------------------------------------------------------")
         for m_name, res in FINAL_REPORT.items():
-            print(f"{m_name:<30} | {res['dim']:<10} | {res['acc']:<12.4f} | {res['p']:<12.4f} | {res['r']:<12.4f} | {res['f1']:<12.4f}")
+            print(f"{m_name:<30} | {res['dim']:<10} | {res['acc']:.4f:<12} | {res['p']:.4f:<12} | {res['r']:.4f:<12} | {res['f1']:.4f:<12}")
         print(f"--------------------------------------------------------------------------------------")
 
         print(f"\n📊 正在自動繪製 [Loop {loop_cnt}] 多指標綜合統計圖...")

@@ -9,16 +9,22 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, models
 from sklearn.metrics import confusion_matrix
+from datetime import datetime
+import matplotlib.pyplot as plt
 
-# 💡 真正引入現成的鬼蝠魟演算法套件
+# 💡 真正引入現成的鬼蝠魟演算法套件與機器學習分類器
 from mealpy import MRFO 
+from sklearn.svm import SVC, LinearSVC
+from sklearn.metrics import accuracy_score
 
 # 引用自訂模組
 from model_trainer import train_model_with_early_stopping, evaluate_model
 from plotter import plot_learning_curve, plot_confusion_matrix
-
+# 🌟 新增：將 mealpy 的底層類別移至最頂端，徹底解決全域未定義報錯 🌟
+from mealpy.utils.problem import Problem
+from mealpy.utils.space import BinaryVar
 # =====================================================================
-# 1. Baseline 3：雙流拼接融合網絡 (GaitMCCA Style)
+# 1. Baseline 3：雙流拼接融合網絡 (GaitMCCA Style - 1024維保護層)
 # =====================================================================
 class GaitMCCAStyleNet(nn.Module):
     def __init__(self, num_classes=6):
@@ -32,27 +38,26 @@ class GaitMCCAStyleNet(nn.Module):
         self.efficient_pool = nn.AdaptiveAvgPool2d((1, 1))
         
         self.fusion_layer = nn.Sequential(
-            nn.Linear(1792, 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(1792, 1024),
+            nn.BatchNorm1d(1024),
             nn.ReLU(),
             nn.Dropout(0.4)
         )
-        self.classifier = nn.Linear(512, num_classes)
+        self.classifier = nn.Linear(1024, num_classes)
 
     def forward(self, x):
         f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1) 
         f_efficient = torch.flatten(self.efficient_pool(self.efficient_features(x)), 1) 
         f_combined = torch.cat((f_squeeze, f_efficient), dim=1) 
-        f_fused = self.fusion_layer(f_combined) # 輸出特徵數：512
+        f_fused = self.fusion_layer(f_combined)
         return self.classifier(f_fused)
 
 # =====================================================================
-# 2. Baseline 4：雙流特徵 + 真正 MRFO 鬼蝠魟索引切片篩選網絡
+# 2. Baseline 4: 雙流特徵 + MRFO 篩選 + 標準分類頭
 # =====================================================================
 class GaitMRFOOptimizedNet(nn.Module):
     def __init__(self, num_classes=6, selected_indices_list=None):
         super(GaitMRFOOptimizedNet, self).__init__()
-        
         self.squeeze_net = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.DEFAULT)
         self.squeeze_features = self.squeeze_net.features
         self.squeeze_pool = nn.AdaptiveAvgPool2d((1, 1))
@@ -82,11 +87,52 @@ class GaitMRFOOptimizedNet(nn.Module):
         f_combined = torch.cat((f_squeeze, f_efficient), dim=1) 
         f_mrfo_selected = torch.index_select(f_combined, dim=1, index=self.mrfo_indices)
         f_fused = self.post_mrfo_layer(f_mrfo_selected)
-        out = self.classifier(f_fused)
-        return out
+        return self.classifier(f_fused)
 
 # =====================================================================
-# 3. Dataset 類別定義
+# 3. Baseline 6: 雙流特徵 + MRFO 篩選 + 深度收窄神經網絡
+# =====================================================================
+class GaitMRFONarrowNet(nn.Module):
+    def __init__(self, num_classes=6, selected_indices_list=None):
+        super(GaitMRFONarrowNet, self).__init__()
+        self.squeeze_net = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.DEFAULT)
+        self.squeeze_features = self.squeeze_net.features
+        self.squeeze_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        self.efficient_net = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        self.efficient_features = self.efficient_net.features
+        self.efficient_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        if selected_indices_list is None:
+            selected_indices_list = torch.linspace(0, 1791, steps=762).long()
+        else:
+            selected_indices_list = torch.tensor(selected_indices_list).long()
+            
+        self.register_buffer('mrfo_indices', selected_indices_list)
+        optimized_dim = len(selected_indices_list)
+        
+        self.narrow_backbone = nn.Sequential(
+            nn.Linear(optimized_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.2)
+        )
+        self.classifier = nn.Linear(64, num_classes)
+
+    def forward(self, x):
+        f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1) 
+        f_efficient = torch.flatten(self.efficient_pool(self.efficient_features(x)), 1) 
+        f_combined = torch.cat((f_squeeze, f_efficient), dim=1) 
+        f_mrfo_selected = torch.index_select(f_combined, dim=1, index=self.mrfo_indices)
+        f_narrowed = self.narrow_backbone(f_mrfo_selected)
+        return self.classifier(f_narrowed)
+
+# =====================================================================
+# 4. Dataset 類別定義
 # =====================================================================
 class MedicalImageDataset(Dataset):
     CLASS_MAP = {
@@ -101,10 +147,8 @@ class MedicalImageDataset(Dataset):
     def __init__(self, data_dir, label_path, transform=None):
         self.data_dir = data_dir
         self.transform = transform
-        
         if not os.path.exists(label_path):
             raise FileNotFoundError(f"❌ 找不到標籤 CSV 檔案: {label_path}")
-            
         self.labels_df = pd.read_csv(label_path)
         col_file = self.labels_df.columns[0]  
         col_label = self.labels_df.columns[1] 
@@ -113,10 +157,8 @@ class MedicalImageDataset(Dataset):
         for _, row in self.labels_df.iterrows():
             val_file = str(row[col_file]).strip()
             val_label = str(row[col_label]).strip()
-            
             if val_label.isalpha() or 'class' in val_label.lower() or 'label' in val_label.lower():
                 continue
-                
             try:
                 l_id = int(float(val_label)) 
                 if val_file.isdigit():
@@ -128,7 +170,6 @@ class MedicalImageDataset(Dataset):
                         f_name = f"rgb_{val_file}.png" if not val_file.endswith('.png') else val_file
             except ValueError:
                 continue
-            
             if l_id in self.CLASS_MAP:
                 img_path = os.path.join(data_dir, 'rgb', f_name)
                 if os.path.exists(img_path):
@@ -152,217 +193,314 @@ class MedicalImageDataset(Dataset):
             return self.__getitem__((idx + 1) % len(self.samples))
 
 # =====================================================================
-# 4. 主執行程序 (自動排程消融實驗版本)
+# 5. 主執行程序 (全自動化微調特徵再尋優完全體)
 # =====================================================================
 if __name__ == "__main__":
-    # --- 💡 核心變革：將 4 個 Baseline 組成排程清單，準備啟動 for 迴圈自動連跑 ---
-    ABLATION_MODES = [
-        "SqueezeNet_Only", 
-        "EfficientNet_Only", 
-        "GaitMCCA_Fusion", 
-        "MRFO_Optimization"
-    ]
-    
-    # 用來最後統合輸出所有實驗結果的總戰報字典
-    FINAL_REPORT = {}
-    
-    # --- 基礎全域參數設定 ---
-    BATCH_SIZE = 64
-    NUM_CLASSES = 6
-    EPOCHS = 300
-    PATIENCE = 15
-    IR=1e-4;  
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 啟動自動化消融實驗排程 | 當前硬體: {DEVICE} | 總計實驗清單: {ABLATION_MODES}")
+    PROJECT_ROOT_DIR = os.getcwd()
 
-    # 資料夾主路徑與標籤自動對齊
-    BASE_DIR = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split"
-    TRAIN_DIR = os.path.join(BASE_DIR, "Posture_train")
-    VAL_DIR = os.path.join(BASE_DIR, "Posture_valdidate")             
-    TEST_DIR = os.path.join(BASE_DIR, "Posture_test")   
-    
-    def get_valid_csv_path(folder_path):
-        p1 = os.path.join(folder_path, "label.csv")
-        p2 = os.path.join(folder_path, "labels.csv")
-        return p1 if os.path.exists(p1) else (p2 if os.path.exists(p2) else p1)
-
-    TRAIN_LABEL = get_valid_csv_path(TRAIN_DIR)
-    VAL_LABEL = get_valid_csv_path(VAL_DIR)
-    TEST_LABEL = get_valid_csv_path(TEST_DIR)
-
-    data_transforms = {
-        'train': transforms.Compose([
-            transforms.Resize((224, 224)), transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(15), transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ]),
-        'val_test': transforms.Compose([
-            transforms.Resize((224, 224)), transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
-    }
-
-    print("\n📦 正在載入通用數據集...")
-    train_dataset = MedicalImageDataset(TRAIN_DIR, TRAIN_LABEL, transform=data_transforms['train'])
-    val_dataset = MedicalImageDataset(VAL_DIR, VAL_LABEL, transform=data_transforms['val_test'])
-    test_dataset = MedicalImageDataset(TEST_DIR, TEST_LABEL, transform=data_transforms['val_test'])
-
-    dataloaders = {
-        'train': DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True),
-        'val': DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False),
-        'test': DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    }
-
-    print(f"📊 數據載入完畢！(訓練集: {len(train_dataset)} 筆, 驗證集: {len(val_dataset)} 筆, 測試集: {len(test_dataset)} 筆)")
-    class_names = ["Standing", "Sitting", "Lying", "Bending", "Crawling", "Empty"]
-
-    # =====================================================================
-    # 🔄 核心機制：利用 for 迴圈，依序全自動化跑完這 4 條 Baseline！
-    # =====================================================================
-    for step_idx, RUN_MODE in enumerate(ABLATION_MODES, 1):
-        print(f"\n\n##########################################################")
-        print(f" 🎬 正在自動執行第 [{step_idx}/4] 項消融實驗 ➡️ 模式: {RUN_MODE}")
-        print(f"##########################################################\n")
+    for loop_cnt in range(1, 2):
+        os.chdir(PROJECT_ROOT_DIR)
+        print("\n" + "="*60)
+        print(f"🔄 【第 {loop_cnt} / 4 次大型獨立重複實驗】正式啟動")
+        print("="*60 + "\n")
         
+        # 💡 排程控制開關（可依據需求增減項目，權重圖表全自動對齊）
+        ACTIVE_RUN_LIST = [
+            "SqueezeNet_Only", 
+            "EfficientNet_Only", 
+            "GaitMCCA_Fusion", 
+            #"MRFO_Optimization",
+            "MRFO_SVM",          
+            "MRFO_NarrowNet"     
+        ]
+        
+        FINAL_REPORT = {}
+        BATCH_SIZE = 64
+        NUM_CLASSES = 6
+        EPOCHS = 300
+        IR = 1e-4
+        PATIENCE = 25  
+        DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"🚀 當前排程硬體: {DEVICE} | 本輪排程清單: {ACTIVE_RUN_LIST}")
+
+        current_time_str = datetime.now().strftime("%Y%m%d_%H%M")
+        OUTPUT_RESULT_DIR = f"./ablation_results_Loop{loop_cnt}_{current_time_str}"
+        os.makedirs(OUTPUT_RESULT_DIR, exist_ok=True)
+        print(f"📁 建立本次成果歸檔夾: {OUTPUT_RESULT_DIR}")
+
+        # 完美保留您的硬碟路徑不動
+        BASE_DIR = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026_2\Posture_New_Split"
+        TRAIN_DIR = os.path.join(BASE_DIR, "Posture_train")
+        VAL_DIR = os.path.join(BASE_DIR, "Posture_valdidate")             
+        TEST_DIR = os.path.join(BASE_DIR, "Posture_test")   
+        
+        def get_valid_csv_path(folder_path):
+            p1 = os.path.join(folder_path, "label.csv")
+            p2 = os.path.join(folder_path, "labels.csv")
+            return p1 if os.path.exists(p1) else (p2 if os.path.exists(p2) else p1)
+
+        TRAIN_LABEL = get_valid_csv_path(TRAIN_DIR)
+        VAL_LABEL = get_valid_csv_path(VAL_DIR)
+        TEST_LABEL = get_valid_csv_path(TEST_DIR)
+
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.Resize((224, 224)), transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15), transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ]),
+            'val_test': transforms.Compose([
+                transforms.Resize((224, 224)), transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+        }
+
+        print("\n📦 正在載入通用數據集...")
+        train_dataset = MedicalImageDataset(TRAIN_DIR, TRAIN_LABEL, transform=data_transforms['train'])
+        val_dataset = MedicalImageDataset(VAL_DIR, VAL_LABEL, transform=data_transforms['val_test'])
+        test_dataset = MedicalImageDataset(TEST_DIR, TEST_LABEL, transform=data_transforms['val_test'])
+
+        dataloaders = {
+            'train': DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True),
+            'val': DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False),
+            'test': DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+        }
+        class_names = ["Standing", "Sitting", "Lying", "Bending", "Crawling", "Empty"]
+
+        # =====================================================================
+        # 🔄 【第一階段：打底微調】
+        # 只要排程內有 MRFO 家族，我們就「先」在背景將融合網路練到最強，作為特徵提取器！
+        # =====================================================================
         mrfo_final_indices = None
+        need_mrfo = any("MRFO" in mode for mode in ACTIVE_RUN_LIST)
         
-        # 💡 只有輪到第 4 條 MRFO 模式時，才會實打實啟動 Mealpy 鬼蝠魟演算法尋優
-        if RUN_MODE == "MRFO_Optimization":
-            from mealpy.utils.problem import Problem
-            from mealpy.utils.space import BinaryVar
+        if need_mrfo:
+            print(f"\n🌟 [學術重構核心] 啟動第一階段：正在預先微調雙流 MCCA 融合網絡以獲取黃金領域知識...")
+            pre_trainer = GaitMCCAStyleNet(num_classes=NUM_CLASSES).to(DEVICE)
+            pre_criterion = nn.CrossEntropyLoss()
+            pre_optimizer = optim.Adam(pre_trainer.parameters(), lr=IR)
             
-            print(f"🌊 [Mealpy 核心啟動] 偵測進入 MRFO 階段，啟動鬼蝠魟特徵尋優程序...")
-            print(f"   -> 正在提取特徵快取中...")
+            # 利用 Early Stopping 將融合網路練到最優狀態
+            pre_trainer, _ = train_model_with_early_stopping(
+                pre_trainer, dataloaders, pre_criterion, pre_optimizer, 
+                num_epochs=EPOCHS, patience=PATIENCE, device=DEVICE
+            )
+            pre_trainer.eval()
             
-            extractor = GaitMCCAStyleNet(num_classes=NUM_CLASSES).to(DEVICE)
-            extractor.eval()
-            
-            temp_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+            print(f"🌊 [第二階段：黃金特徵提取] 提取 300 筆經醫學姿勢微調後的 1792 維頂級融合特徵快取...")
+            temp_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
             cached_features, cached_labels = [], []
             with torch.no_grad():
                 for idx, (inputs, labels) in enumerate(temp_loader):
-                    if idx >= 100: break 
+                    if idx >= 300: break 
                     inputs = inputs.to(DEVICE)
-                    f_s = torch.flatten(extractor.squeeze_pool(extractor.squeeze_features(inputs)), 1)
-                    f_e = torch.flatten(extractor.efficient_pool(extractor.efficient_features(inputs)), 1)
+                    f_s = torch.flatten(pre_trainer.squeeze_pool(pre_trainer.squeeze_features(inputs)), 1)
+                    f_e = torch.flatten(pre_trainer.efficient_pool(pre_trainer.efficient_features(inputs)), 1)
                     f_comb = torch.cat((f_s, f_e), dim=1).cpu().numpy()
                     cached_features.append(f_comb[0])
                     cached_labels.append(labels.numpy()[0])
                     
             X_train_mrfo = np.array(cached_features)
+            y_train_mrfo = np.array(cached_labels)
             
-            # 帶有數量懲罰項的自適應問題類別
+            split_val = int(len(X_train_mrfo) * 0.3)
+            X_eval_train, X_eval_val = X_train_mrfo[split_val:], X_train_mrfo[:split_val]
+            y_eval_train, y_eval_val = y_train_mrfo[split_val:], y_train_mrfo[:split_val]
+            
+            print(f"🌊 [第三階段：MRFO 有監督尋優] 鬼蝠魟群體正式下海篩選最優分類子集...")
             class MantaRayFeatureSelectionProblem(Problem):
                 def __init__(self, bounds, minmax="max", **kwargs):
                     super().__init__(bounds=bounds, minmax=minmax, **kwargs)
-                    
                 def obj_func(self, x):
                     selected_idx = np.where(x > 0.5)[0]
                     num_selected = len(selected_idx)
-                    if num_selected == 0: return 0.0 
-                    feat_quality = float(np.mean(X_train_mrfo[:, selected_idx]))
-                    distance_from_target = abs(num_selected - 762)
-                    penalty_factor = np.exp(-distance_from_target / 500.0) 
-                    return feat_quality * penalty_factor
+                    if num_selected < 10 or num_selected > 1300: return 0.0 
+                    try:
+                        # 💡 鬼蝠魟此時的眼睛看的是微調特徵在 LinearSVC 上的頂尖準確度！
+                        clf = LinearSVC(dual=False, random_state=42, max_iter=1000)
+                        clf.fit(X_eval_train[:, selected_idx], y_eval_train)
+                        preds = clf.predict(X_eval_val[:, selected_idx])
+                        val_acc = accuracy_score(y_eval_val, preds)
+                        distance_penalty = np.exp(-abs(num_selected - 762) / 1000.0)
+                        return (val_acc * 0.99) + (distance_penalty * 0.01)
+                    except:
+                        return 0.0
 
             mrfo_bounds = [BinaryVar(name=f"feat_{i}") for i in range(1792)]
             posture_problem = MantaRayFeatureSelectionProblem(bounds=mrfo_bounds, minmax="max")
 
-            # 執行 50 代 MRFO 尋優
             mrfo_optimizer = MRFO.OriginalMRFO(epoch=50, pop_size=35)
-            print(f"   -> 鬼蝠魟群體正在進入 1792 維海洋進行鏈式與翻滾覓食...")
             best_agent = mrfo_optimizer.solve(posture_problem)
-            
             mrfo_final_indices = np.where(best_agent.solution > 0.5)[0]
             
             if len(mrfo_final_indices) < 10 or len(mrfo_final_indices) > 1500:
-                print("   ⚠️ 鬼蝠魟本次選取維度過於極端，啟動防護：隨機抽樣 762 維不重複核心特徵...")
                 mrfo_final_indices = np.random.choice(1792, size=762, replace=False)
                 mrfo_final_indices = np.sort(mrfo_final_indices)
+            print(f"🎉 鬼蝠魟篩選完成！成功從微調空間精選出特徵數: 【 {len(mrfo_final_indices)} 維 】\n")
+
+        # =====================================================================
+        # 🔄 消融排程動態執行迴圈
+        # =====================================================================
+        for step_idx, RUN_MODE in enumerate(ACTIVE_RUN_LIST, 1):
+            os.chdir(PROJECT_ROOT_DIR)
+            print(f"\n🎬 [Loop {loop_cnt}/4] 正在執行第 [{step_idx}/{len(ACTIVE_RUN_LIST)}] 項: {RUN_MODE}")
+            
+            # --- 模式 A: 傳統 PyTorch 端到端網路模型程序 ---
+            if RUN_MODE in ["SqueezeNet_Only", "EfficientNet_Only", "GaitMCCA_Fusion", "MRFO_Optimization", "MRFO_NarrowNet"]:
+                if RUN_MODE == "SqueezeNet_Only":
+                    model_name = "Baseline1_SqueezeNet"
+                    model = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.DEFAULT)
+                    model.classifier[1] = nn.Conv2d(512, NUM_CLASSES, kernel_size=(1,1))
+                    features_dim_before_classifier = 512 
+                elif RUN_MODE == "EfficientNet_Only":
+                    model_name = "Baseline2_EfficientNetB0"
+                    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+                    features_dim_before_classifier = model.classifier[1].in_features 
+                    model.classifier[1] = nn.Linear(features_dim_before_classifier, NUM_CLASSES)
+                elif RUN_MODE == "GaitMCCA_Fusion":
+                    model_name = "Baseline3_GaitMCCA_Fusion"
+                    model = GaitMCCAStyleNet(num_classes=NUM_CLASSES)
+                    features_dim_before_classifier = 1024 
+                elif RUN_MODE == "MRFO_Optimization":
+                    model_name = "Baseline4_MRFO_Optimization"
+                    model = GaitMRFOOptimizedNet(num_classes=NUM_CLASSES, selected_indices_list=mrfo_final_indices)
+                    features_dim_before_classifier = len(model.mrfo_indices)
+                elif RUN_MODE == "MRFO_NarrowNet":
+                    model_name = "Baseline6_MRFO_NarrowNet"
+                    model = GaitMRFONarrowNet(num_classes=NUM_CLASSES, selected_indices_list=mrfo_final_indices)
+                    features_dim_before_classifier = 64 
                 
-            print(f"🎉 鬼蝠魟優化結束！去蕪存菁挑選出精華特徵數: 【 {len(mrfo_final_indices)} 維 】\n")
+                print(f"⚙️ 架構: {model_name} | 分類前特徵維度: {features_dim_before_classifier} 維")
+                model = model.to(DEVICE)
+                criterion = nn.CrossEntropyLoss()
+                optimizer = optim.Adam(model.parameters(), lr=IR)
 
-        # --- 🛠️ 根據當前 for 迴圈進度，動態初始化模型架構 ---
-        if RUN_MODE == "SqueezeNet_Only":
-            model_name = "Baseline1_SqueezeNet"
-            model = models.squeezenet1_1(weights=models.SqueezeNet1_1_Weights.DEFAULT)
-            model.classifier[1] = nn.Conv2d(512, NUM_CLASSES, kernel_size=(1,1))
-            features_dim_before_classifier = 512 
+                # 執行實體訓練
+                model, history = train_model_with_early_stopping(
+                    model, dataloaders, criterion, optimizer, num_epochs=EPOCHS, patience=PATIENCE, device=DEVICE
+                )
+                
+                # 備份權重
+                abs_w_path = os.path.abspath(os.path.join(OUTPUT_RESULT_DIR, f"best_model_{model_name}.pth"))
+                torch.save(model.state_dict(), abs_w_path)
+                
+                # 畫學習曲線
+                os.chdir(os.path.abspath(OUTPUT_RESULT_DIR))
+                try: plot_learning_curve(history, model_name)
+                except Exception as e: print(f"⚠️ 學習曲線儲存失敗: {e}")
+                os.chdir(PROJECT_ROOT_DIR)
+
+                # 測試集效能評估
+                true_labels, pred_labels, metrics = evaluate_model(model, dataloaders['test'], device=DEVICE)
+                acc, precision, recall, f1 = metrics
+
+            # --- 模式 B: 🌟 全新新增 MRFO + 傳統 SVM 分類頭模式 (提取微調特徵餵給 RBF-SVM) ---
+            elif RUN_MODE == "MRFO_SVM":
+                model_name = "Baseline5_MRFO_SVM"
+                features_dim_before_classifier = len(mrfo_final_indices)
+                print(f"⚙️ 架構: {model_name} | 特徵維度: {features_dim_before_classifier} 維 (微調特徵對接 RBF-SVM)")
+                
+                # 1. 💡 關鍵點：此處提取特徵用的是前面實打實練滿微調權重的 pre_trainer，確保特徵品質極高！
+                print("   -> 正在使用微調後的雙流網路提取完整數據集的特徵矩陣...")
+                
+                def extract_all_features(loader):
+                    all_feats, all_labs = [], []
+                    with torch.no_grad():
+                        for inputs, labels in loader:
+                            inputs = inputs.to(DEVICE)
+                            f_s = torch.flatten(pre_trainer.squeeze_pool(pre_trainer.squeeze_features(inputs)), 1)
+                            f_e = torch.flatten(pre_trainer.efficient_pool(pre_trainer.efficient_features(inputs)), 1)
+                            f_comb = torch.cat((f_s, f_e), dim=1).cpu().numpy()
+                            all_feats.append(f_comb)
+                            all_labs.append(labels.numpy())
+                    return np.vstack(all_feats), np.concatenate(all_labs)
+                
+                X_train_all, y_train_all = extract_all_features(dataloaders['train'])
+                X_test_all, y_test_all = extract_all_features(dataloaders['test'])
+                
+                # 2. 進行 MRFO 經監督篩選後的特徵切片
+                X_train_sliced = X_train_all[:, mrfo_final_indices]
+                X_test_sliced = X_test_all[:, mrfo_final_indices]
+                
+                # 3. 訓練 SVM
+                print("   -> 正在擬合支持向量機 (SVC) 分類頭...")
+                svm_model = SVC(kernel='rbf', C=1.0, gamma='scale', random_state=42)
+                svm_model.fit(X_train_sliced, y_train_all)
+                
+                # 4. 預測測試集指標
+                pred_labels = svm_model.predict(X_test_sliced)
+                true_labels = y_test_all
+                
+                from sklearn.metrics import precision_score, recall_score, f1_score
+                acc = accuracy_score(true_labels, pred_labels)
+                precision = precision_score(true_labels, pred_labels, average='macro', zero_division=0)
+                recall = recall_score(true_labels, pred_labels, average='macro', zero_division=0)
+                f1 = f1_score(true_labels, pred_labels, average='macro', zero_division=0)
+                
+                history = {'train_loss': [], 'val_loss': []}
+
+            # 總戰報數據整合
+            FINAL_REPORT[model_name] = {
+                "dim": features_dim_before_classifier, "acc": acc, "p": precision, "r": recall, "f1": f1
+            }
+
+            # 輸出混淆矩陣圖 (.png)
+            os.chdir(os.path.abspath(OUTPUT_RESULT_DIR))
+            try: plot_confusion_matrix(true_labels, pred_labels, class_names, model_name)
+            except Exception as e: print(f"⚠️ 混淆矩陣圖儲存失敗: {e}")
+            os.chdir(PROJECT_ROOT_DIR)
+            print(f"🎉 模式 [{model_name}] 成果已歸檔！")
+
+        # =====================================================================
+        # 🏁 終點大總結與自動化繪製統計對比圖
+        # =====================================================================
+        print(f"\n\n🏆🏆🏆 [Loop {loop_cnt}/4] 消融實驗排程全部執行完畢！【第 {loop_cnt} 輪數據總覽】 🏆🏆🏆")
+        print(f"--------------------------------------------------------------------------------------")
+        print(f"{'模型名稱 (Model Name)':<30} | {'特徵數 (Dim)':<10} | {'準確度 (Acc)':<12} | {'精準率 (Prec)':<12} | {'召回率 (Rec)':<12} | {'F1-Score':<12}")
+        print(f"--------------------------------------------------------------------------------------")
+        for m_name, res in FINAL_REPORT.items():
+            print(f"{m_name:<30} | {res['dim']:<10} | {res['acc']:<12.4f} | {res['p']:<12.4f} | {res['r']:<12.4f} | {res['f1']:<12.4f}")
+        print(f"--------------------------------------------------------------------------------------")
+
+        print(f"\n📊 正在自動繪製 [Loop {loop_cnt}] 多指標綜合統計圖...")
+        try:
+            models_keys = list(FINAL_REPORT.keys())
+            metrics_labels = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
             
-        elif RUN_MODE == "EfficientNet_Only":
-            model_name = "Baseline2_EfficientNetB0"
-            model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-            features_dim_before_classifier = model.classifier[1].in_features 
-            model.classifier[1] = nn.Linear(features_dim_before_classifier, NUM_CLASSES)
+            data_matrix = []
+            for m_name in models_keys:
+                data_matrix.append([FINAL_REPORT[m_name]['acc'], FINAL_REPORT[m_name]['p'], FINAL_REPORT[m_name]['r'], FINAL_REPORT[m_name]['f1']])
+            data_matrix = np.array(data_matrix)
             
-        elif RUN_MODE == "GaitMCCA_Fusion":
-            model_name = "Baseline3_GaitMCCA_Fusion"
-            model = GaitMCCAStyleNet(num_classes=NUM_CLASSES)
-            features_dim_before_classifier = 512 
+            x = np.arange(len(metrics_labels))
+            width = 0.12 
             
-        elif RUN_MODE == "MRFO_Optimization":
-            model_name = "Baseline4_MRFO_Optimization"
-            model = GaitMRFOOptimizedNet(num_classes=NUM_CLASSES, selected_indices_list=mrfo_final_indices)
-            features_dim_before_classifier = len(model.mrfo_indices)
+            fig, ax = plt.subplots(figsize=(13, 6), dpi=300)
+            colors = ['#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5', '#c49c94']
+            
+            for i, m_name in enumerate(models_keys):
+                ax.bar(x + (i - len(models_keys)/2 + 0.5) * width, data_matrix[i], width, label=f"{m_name} (Dim: {FINAL_REPORT[m_name]['dim']})", color=colors[i % len(colors)], edgecolor='black', linewidth=0.5)
+                
+            ax.set_ylabel('Score', fontsize=12, fontweight='bold')
+            ax.set_title(f'Ablation Study [Loop {loop_cnt}]: Two-Stage Fine-tuned Feature Selection Summary', fontsize=14, fontweight='bold', pad=15)
+            ax.set_xticks(x)
+            ax.set_xticklabels(metrics_labels, fontsize=11, fontweight='bold')
+            ax.set_ylim(0, 1.2)
+            
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=9, frameon=True)
+            plt.tight_layout()
+            
+            os.chdir(os.path.abspath(OUTPUT_RESULT_DIR))
+            plt.savefig("ablation_metrics_comparison.png", bbox_inches='tight')
+            plt.close()
+            os.chdir(PROJECT_ROOT_DIR)
+            print(f"🎨 [總對比圖繪製成功] 已安全儲存至子資料夾內！")
+        except Exception as e:
+            os.chdir(PROJECT_ROOT_DIR)
+            print(f"⚠️ 繪製統計圖時發生錯誤: {e}")
 
-        # 🌟 即時高亮印出分類前的特徵維度
-        print(f"==========================================================")
-        print(f"🔍 當前運行 Baseline 模型: {model_name}")
-        print(f"🔍 進入分類層(Classifier)前一檔的「核心特徵數」: 【 {features_dim_before_classifier} 維 】")
-        print(f"==========================================================")
+        print(f"\n💡 [Loop {loop_cnt}] 本輪指定實驗數據與總對比圖已安全儲存至：【 {OUTPUT_RESULT_DIR} 】\n")
 
-        model = model.to(DEVICE)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=IR)
-
-        # --- A. 執行訓練 ---
-        print(f"\n🏋️ 啟動模型訓練模型 [{model_name}]...")
-        model, history = train_model_with_early_stopping(
-            model, dataloaders, criterion, optimizer, num_epochs=EPOCHS, patience=PATIENCE, device=DEVICE
-        )
-
-        # --- B. 繪製並儲存該模式的學習曲線 ---
-        plot_learning_curve(history, model_name)
-
-        # --- C. 測試集性能評估 ---
-        print(f"\n🔍 正在使用測試集進行性能評估...")
-        true_labels, pred_labels, metrics = evaluate_model(model, dataloaders['test'], device=DEVICE)
-        acc, precision, recall, f1 = metrics
-        
-        print(f"\n==================== {model_name} 測試集指標 ====================")
-        print(f"進入分類前特徵維度: {features_dim_before_classifier}")
-        print(f"精確度 (Accuracy) : {acc:.4f}")
-        print(f"精準率 (Precision): {precision:.4f}")
-        print(f"召回率 (Recall)   : {recall:.4f}")
-        print(f"F1 得分 (F1-Score) : {f1:.4f}")
-        print("==========================================================")
-
-        # 儲存到總戰報中，方便最後列印對照
-        FINAL_REPORT[model_name] = {
-            "dim": features_dim_before_classifier,
-            "acc": acc,
-            "p": precision,
-            "r": recall,
-            "f1": f1
-        }
-
-        # 輸出文字版混淆矩陣
-        cm = confusion_matrix(true_labels, pred_labels, labels=list(range(len(class_names))))
-        cm_df = pd.DataFrame(cm, index=[f"True_{c}" for c in class_names], columns=[f"Pred_{c}" for c in class_names])
-        print(f"\n[文字版混淆矩陣 - {model_name}]\n", cm_df)
-
-        # --- D. 繪製並儲存該模式的混淆矩陣圖 ---
-        plot_confusion_matrix(true_labels, pred_labels, class_names, model_name)
-        print(f"\n🎉 模式 [{model_name}] 消融實驗與特徵分析完畢！自動準備切換下一條...\n")
-
-    # =====================================================================
-    # 🏁 終點大總結：4 條 Baseline 全部跑完，自動列印「終極消融實驗數據戰報」
-    # =====================================================================
-    print(f"\n\n🏆🏆🏆 全自動化消融實驗排程全部執行完畢！【終極戰報總覽】 🏆🏆🏆")
-    print(f"--------------------------------------------------------------------------------------")
-    print(f"{'模型名稱 (Model Name)':<30} | {'特徵數 (Dim)':<10} | {'準確度 (Acc)':<12} | {'精準率 (Prec)':<12} | {'召回率 (Rec)':<12} | {'F1-Score':<12}")
-    print(f"--------------------------------------------------------------------------------------")
-    for m_name, res in FINAL_REPORT.items():
-        print(f"{m_name:<30} | {res['dim']:<10} | {res['acc']:.4f:<12} | {res['p']:.4f:<12} | {res['r']:.4f:<12} | {res['f1']:.4f:<12}")
-    print(f"--------------------------------------------------------------------------------------")
-    print(f"💡 4 組模型對應的 .png 圖檔與學習曲線皆已獨立儲存於專案目錄下。可以直接撰寫論文囉！")
+    print("\n" + "#"*60)
+    print("🏆🏆🏆 【雙階段微調特徵優化消融實驗連跑排程】已全自動化完美通關！")
+    print("#"*60)

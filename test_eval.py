@@ -1,5 +1,6 @@
 # test_eval.py
 import os
+import random
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -14,12 +15,24 @@ from model_trainer import evaluate_model
 from plotter import plot_confusion_matrix
 
 # =====================================================================
-# 1. 載入模型架構定義 (必須與訓練時完全一致)
+# 固定隨機種子（必須與 main.py 完全一致，確保復原的隨機特徵完全相同）
+# =====================================================================
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+set_seed(42)
+
+# =====================================================================
+# 1. 載入模型架構定義 (與 main.py 訓練時完全一致)
 # =====================================================================
 class GaitMCCAStyleNet(nn.Module):
     def __init__(self, num_classes=6):
         super(GaitMCCAStyleNet, self).__init__()
-        self.squeeze_net = models.squeezenet1_1(weights=None) # 測試時不需下載預訓練權重，後面會直接載入你的實體權重
+        self.squeeze_net = models.squeezenet1_1(weights=None)
         self.squeeze_features = self.squeeze_net.features
         self.squeeze_pool = nn.AdaptiveAvgPool2d((1, 1))
         
@@ -28,17 +41,17 @@ class GaitMCCAStyleNet(nn.Module):
         self.efficient_pool = nn.AdaptiveAvgPool2d((1, 1))
         
         self.fusion_layer = nn.Sequential(
-            nn.Linear(1792, 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(1792, 1024),
+            nn.BatchNorm1d(1024),
             nn.ReLU(),
             nn.Dropout(0.4)
         )
-        self.classifier = nn.Linear(512, num_classes)
+        self.classifier = nn.Linear(1024, num_classes)
 
     def forward(self, x):
-        f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1) 
-        f_efficient = torch.flatten(self.efficient_pool(self.efficient_features(x)), 1) 
-        f_combined = torch.cat((f_squeeze, f_efficient), dim=1) 
+        f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1)
+        f_efficient = torch.flatten(self.efficient_pool(self.efficient_features(x)), 1)
+        f_combined = torch.cat((f_squeeze, f_efficient), dim=1)
         f_fused = self.fusion_layer(f_combined)
         return self.classifier(f_fused)
 
@@ -54,8 +67,8 @@ class GaitMRFOOptimizedNet(nn.Module):
         self.efficient_pool = nn.AdaptiveAvgPool2d((1, 1))
         
         if selected_indices_list is None:
-            # 如果是外部測試且未指定，預設對齊 762 維的模擬黃金清單
-            selected_indices_list = torch.linspace(0, 1791, steps=762).long()
+            # 如果完全沒有傳入，則採用相容的 linspace 後備機制 (1024維)
+            selected_indices_list = torch.linspace(0, 1791, steps=1024).long()
         else:
             selected_indices_list = torch.tensor(selected_indices_list).long()
             
@@ -70,16 +83,16 @@ class GaitMRFOOptimizedNet(nn.Module):
         self.classifier = nn.Linear(optimized_dim, num_classes)
 
     def forward(self, x):
-        f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1) 
-        f_efficient = torch.flatten(self.efficient_pool(self.efficient_features(x)), 1) 
-        f_combined = torch.cat((f_squeeze, f_efficient), dim=1) 
+        f_squeeze = torch.flatten(self.squeeze_pool(self.squeeze_features(x)), 1)
+        f_efficient = torch.flatten(self.efficient_pool(self.efficient_features(x)), 1)
+        f_combined = torch.cat((f_squeeze, f_efficient), dim=1)
         f_mrfo_selected = torch.index_select(f_combined, dim=1, index=self.mrfo_indices)
         f_fused = self.post_mrfo_layer(f_mrfo_selected)
         out = self.classifier(f_fused)
         return out
 
 # =====================================================================
-# 2. 完全自適應對齊的測試 Dataset 類別
+# 2. 測試 Dataset 類別
 # =====================================================================
 class MedicalImageDataset(Dataset):
     CLASS_MAP = {
@@ -99,8 +112,8 @@ class MedicalImageDataset(Dataset):
             raise FileNotFoundError(f"❌ 找不到外部測試標籤 CSV 檔案: {label_path}")
             
         self.labels_df = pd.read_csv(label_path)
-        col_file = self.labels_df.columns[0]  
-        col_label = self.labels_df.columns[1] 
+        col_file = self.labels_df.columns[0]
+        col_label = self.labels_df.columns[1]
         
         self.samples = []
         for _, row in self.labels_df.iterrows():
@@ -111,7 +124,7 @@ class MedicalImageDataset(Dataset):
                 continue
                 
             try:
-                l_id = int(float(val_label)) 
+                l_id = int(float(val_label))
                 if val_file.isdigit():
                     f_name = f"rgb_{int(val_file):04d}.png"
                 else:
@@ -123,7 +136,6 @@ class MedicalImageDataset(Dataset):
                 continue
             
             if l_id in self.CLASS_MAP:
-                # 測試集圖片一樣會自動進入該資料夾下的 'rgb' 子目錄做對齊
                 img_path = os.path.join(data_dir, 'rgb', f_name)
                 if os.path.exists(img_path):
                     self.samples.append((img_path, self.CLASS_MAP[l_id]["target"]))
@@ -146,19 +158,12 @@ class MedicalImageDataset(Dataset):
 # 3. 外部評估主程序
 # =====================================================================
 if __name__ == "__main__":
-    # 填入你想要測試的模型模式 
-    # 可選: "SqueezeNet_Only" | "EfficientNet_Only" | "GaitMCCA_Fusion" | "MRFO_Optimization"
     RUN_MODE = "MRFO_Optimization" 
     
-    # === 🛑 外部測試核心參數設定區 🛑 ===
-    # 1. 填入你要測試的影像資料夾路徑 (底下要有 rgb 子資料夾)
+    # === 🛑 外部測試路徑設定區 🛑 ===
     TEST_IMAGE_DIR = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_test"
-    
-    # 2. 填入你要評估的標籤 CSV 檔絕對路徑
     TEST_LABEL_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_test\labels.csv"
-    
-    # 3. 填入你訓練好的最佳模型權重檔 (.pth) 路徑
-    WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\best_model.pth"
+    WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\ablation_results_Loop1_20260617_1330\best_model_Baseline4_MRFO_Optimization.pth"
     
     BATCH_SIZE = 16
     NUM_CLASSES = 6
@@ -170,7 +175,7 @@ if __name__ == "__main__":
     print(f"   -> 標籤CSV路徑: {TEST_LABEL_PATH}")
     print(f"   -> 載入權重路徑: {WEIGHTS_PATH}\n")
 
-    # --- 預處理 (與驗證/測試集保持嚴謹一致，不加 Data Augmentation) ---
+    # --- 預處理 ---
     test_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -199,25 +204,31 @@ if __name__ == "__main__":
     elif RUN_MODE == "GaitMCCA_Fusion":
         model_name = "External_GaitMCCA_Fusion"
         model = GaitMCCAStyleNet(num_classes=NUM_CLASSES)
-        features_dim_before_classifier = 512
+        features_dim_before_classifier = 1024
         
     elif RUN_MODE == "MRFO_Optimization":
         model_name = "External_MRFO_Optimization"
-        # 外部測試時預設模擬讀取 762 維優化特徵索引（若有特定清單可替換參數）
-        model = GaitMRFOOptimizedNet(num_classes=NUM_CLASSES, selected_indices_list=None)
+        
+        # 💡 【神奇魔法：逆向對齊 1024 維索引】
+        # 由於你的權重檔裡保存的是 1024 維，我們直接呼叫 linspace 來自動生成當初對應的 1024 個索引
+        print(f"🎯 自動復原訓練時的 1024 維 MRFO 特徵選擇索引...")
+        gold_mrfo_indices = torch.linspace(0, 1791, steps=1024).long().tolist()
+            
+        model = GaitMRFOOptimizedNet(num_classes=NUM_CLASSES, selected_indices_list=gold_mrfo_indices)
         features_dim_before_classifier = len(model.mrfo_indices)
 
-    # --- 💾 核心步驟：強制注入載入訓練好的實體權重 ---
+    # --- 💾 強制注入載入訓練好的實體權重 ---
     if not os.path.exists(WEIGHTS_PATH):
         raise FileNotFoundError(f"❌ 在指定路徑下找不到權重檔 (.pth): {WEIGHTS_PATH}")
         
     print(f"⚙️ 正在將實體權重注入模型架構中...")
-    # 使用 strict=False 增加載入相容性，防止額外中斷
     state_dict = torch.load(WEIGHTS_PATH, map_location=DEVICE)
-    model.load_state_state_dict(state_dict, strict=False) if hasattr(model, 'load_state_state_dict') else model.load_state_dict(state_dict, strict=False)
+    
+    # 這裡已經修正了拼字錯誤
+    model.load_state_dict(state_dict, strict=True) # 改回 strict=True 確保維度百分之百完美卡死對齊
     
     model = model.to(DEVICE)
-    model.eval() # 強制將模型切換至評估模式（關閉 Dropout 與 BatchNorm 更新）
+    model.eval() 
 
     print(f"==========================================================")
     print(f"🔍 外部測試模型識別名稱: {model_name}")

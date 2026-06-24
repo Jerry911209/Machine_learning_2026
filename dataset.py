@@ -86,24 +86,40 @@ if __name__ == "__main__":
 
     print("正在初始化 Datasets 並統計動作分類...")
 
+    # train_dataset = MedicalImageDataset(
+    #     data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\rgb', 
+    #     label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\labels.csv', 
+    #     transform=train_transform
+    # )
+    
+    # val_dataset = MedicalImageDataset(
+    #     data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\rgb', 
+    #     label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\labels.csv', 
+    #     transform=val_test_transform
+    # )
+    
+    # test_dataset = MedicalImageDataset(
+    #     data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\rgb', 
+    #     label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\labels.csv', 
+    #     transform=val_test_transform
+    # )
     train_dataset = MedicalImageDataset(
-        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\rgb', 
-        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_train\labels.csv', 
+        data_dir=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_train\rgb', 
+        label_path=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_train\labels.csv', 
         transform=train_transform
     )
     
     val_dataset = MedicalImageDataset(
-        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\rgb', 
-        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_valdidate\labels.csv', 
+        data_dir=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_valdidate\rgb', 
+        label_path=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_valdidate\labels.csv', 
         transform=val_test_transform
     )
     
     test_dataset = MedicalImageDataset(
-        data_dir=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\rgb', 
-        label_path=r'C:\Users\jerry\OneDrive\桌面\git\Topics\機器學習\Posture_train_valdidate_test\Posture_test\labels.csv', 
+        data_dir=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_test\rgb', 
+        label_path=r'C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split\Posture_test\labels.csv', 
         transform=val_test_transform
     )
-
     # 📊 定義精美統計函數
     def pprint_dataset_stats(dataset, name):
         counts = Counter(dataset.raw_labels)  # 使用原始標籤進行統計

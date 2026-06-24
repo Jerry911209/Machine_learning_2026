@@ -199,7 +199,7 @@ class MedicalImageDataset(Dataset):
 # =====================================================================
 if __name__ == "__main__":
     PROJECT_ROOT_DIR = os.getcwd()
-    total_loop_cnt=2
+    total_loop_cnt=4
     
     for loop_cnt in range(1, total_loop_cnt):
         os.chdir(PROJECT_ROOT_DIR)
@@ -224,7 +224,20 @@ if __name__ == "__main__":
         IR = 1e-4
         PATIENCE = 25  
         DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"🚀 當前排程硬體: {DEVICE} | 本輪排程清單: {ACTIVE_RUN_LIST}")
+        
+        match total_loop_cnt:
+            case 1:
+                BATCH_SIZE = 32
+            case 2:
+                BATCH_SIZE = 64
+            case 3:
+                BATCH_SIZE = 128
+            case 4:
+                BATCH_SIZE = 16   
+            
+            case _:  # 相當於 default
+                BATCH_SIZE = 64
+        print(f"🚀 當前排程硬體: {DEVICE} | 本輪排程清單: {ACTIVE_RUN_LIST}|BATCH_SIZE {BATCH_SIZE}")
 
         current_time_str = datetime.now().strftime("%Y%m%d_%H%M")
         OUTPUT_RESULT_DIR = f"./ablation_results_Loop{loop_cnt}_{current_time_str}"

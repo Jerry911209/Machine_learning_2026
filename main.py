@@ -244,10 +244,13 @@ if __name__ == "__main__":
         os.makedirs(OUTPUT_RESULT_DIR, exist_ok=True)
         print(f"📁 建立本次成果歸檔夾: {OUTPUT_RESULT_DIR}")
 
-        BASE_DIR = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_New_Split"
+        #BASE_DIR = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026\Posture_New_Split"
+        # 修改後（相對路徑）：
+        BASE_DIR = "./Posture_New_Split"
         TRAIN_DIR = os.path.join(BASE_DIR, "Posture_train")
-        VAL_DIR = os.path.join(BASE_DIR, "Posture_valdidate")             
-        TEST_DIR = os.path.join(BASE_DIR, "Posture_test")   
+        VAL_DIR = os.path.join(BASE_DIR, "Posture_valdidate")   
+                  
+        TEST_DIR = os.path.join("./Posture_test2", "")   
         
         def get_valid_csv_path(folder_path):
             p1 = os.path.join(folder_path, "label.csv")

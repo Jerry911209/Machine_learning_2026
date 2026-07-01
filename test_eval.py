@@ -206,15 +206,15 @@ if __name__ == "__main__":
     # 📁 情況一：測試神經網路，直接指向對應的 .pth 權重檔案
     # WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\ablation_results_Loop4_20260616_0426\best_model_Baseline1_SqueezeNet.pth"
     # WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\ablation_results_Loop1_20260615_2252\best_model_Baseline2_EfficientNetB0.pth"
-    #WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\ablation_results_Loop1_20260617_1330\best_model_Baseline4_MRFO_Optimization.pth"
-    WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\basemodel\ablation_results_Loop1_20260617_1330\best_model_Baseline6_MRFO_NarrowNet.pth"
+    #WEIGHTS_PATH = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026\basemodel\ablation_results_Loop1_20260617_1330\best_model_Baseline4_MRFO_Optimization.pth"
+    #WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\basemodel\ablation_results_Loop1_20260617_1330\best_model_Baseline6_MRFO_NarrowNet.pth"
     # 📁 情況二：如果想測試特徵選完對接的 SVM (Baseline 5)
     # ❌ 因為 SVM 沒有獨立權重，我們需要將路徑指向當初微調打底的「Baseline 3 (Fusion)」模型作為特徵發動機！
-    #WEIGHTS_PATH = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\ablation_results_Loop1_20260617_1330\best_model_Baseline3_GaitMCCA_Fusion.pth"
+    WEIGHTS_PATH = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026\basemodel\ablation_results_Loop1_20260617_1330\best_model_Baseline3_GaitMCCA_Fusion.pth"
     
     # 🌟 是否強制切換到 SVM 測試模式？ (如果要測 SVM 請改成 True，平常測 PyTorch 網路請維持 False)
-    #TEST_SVM_MODE = True 
-    TEST_SVM_MODE = False 
+    TEST_SVM_MODE = True 
+    #TEST_SVM_MODE = False 
     model_save_name = os.path.basename(WEIGHTS_PATH)
     print(f"📦 正在分析載入的權重檔名: {model_save_name}")
 
@@ -229,8 +229,9 @@ if __name__ == "__main__":
         mrfo_final_indices = np.linspace(0, 1791, num=checkpoint_dim).astype(int)
 
     # --- 載入測試集數據與路徑設定 ---
-    BASE_DIR = r"C:\Users\jerry\Documents\GitHub\Machine_learning_2026\Posture_train_valdidate_test"
-    TEST_DIR = os.path.join(BASE_DIR, "Posture_test")
+    BASE_DIR = r"C:\Users\jerry\OneDrive\桌面\git\Topics\Machine_learning_2026\Posture_test2"
+    #TEST_DIR = os.path.join(BASE_DIR, "Posture_test")
+    TEST_DIR = os.path.join(BASE_DIR, "")
     possible_csv_paths = [os.path.join(TEST_DIR, "label.csv"), os.path.join(TEST_DIR, "labels.csv")]
     TEST_LABEL = next((p for p in possible_csv_paths if os.path.exists(p)), None)
     
